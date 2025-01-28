@@ -15,7 +15,7 @@ num_proc = cpu_count() // 2
 num_shards = {'train': 32, 'val': 8}
 
 # takes 54GB in huggingface .cache dir, about 8M documents (8,013,769)
-dataset = load_dataset("openwebtext")
+dataset = load_dataset("openwebtext", trust_remote_code=True)
 
 # owt by default only contains the 'train' split, so create a test split
 split_dataset = dataset["train"].train_test_split(test_size=0.0005, seed=2357, shuffle=True)
