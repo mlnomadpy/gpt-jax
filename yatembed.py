@@ -45,7 +45,7 @@ class YatEmbed(Module):
   features: int
   dtype: Dtype | None = None
   param_dtype: Dtype = jnp.float32
-  embedding_init: Initializer = nn.initializer.orthogonal()
+  embedding_init: Initializer = initializers.orthogonal()
 
   def setup(self):
     self.embedding = self.param(
