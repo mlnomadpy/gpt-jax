@@ -137,7 +137,6 @@ def init_train_state(key, config: TrainConfig, learning_rate) -> TrainState:
 
     # Create optimizer chain
     optimizer = optax.chain(
-        optax.clip_by_global_norm(config.grad_clip),
         optax.adamw(
             learning_rate,
         ),
