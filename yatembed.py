@@ -96,16 +96,11 @@ class YatEmbed(Module):
         query, embedding = promote_dtype(query, self.embedding, dtype=self.dtype)
         
         # Compute dot product between query and embedding
-        dot_general = lax.dot_general
-        y = dot_general(
-          query,
-          embedding,
-          (((query.ndim - 1,), (0,)), ((), ())),
-        )
-
+        y = jnp.dot(query, embedding.T)
+        
         # Compute squared Euclidean distances components
         query_squared_sum = jnp.sum(query**2, axis=-1, keepdims=True)
-        embedding_squared_sum = jnp.sum(embedding.T**2, axis=-1)
+        embedding_squared_sum = jnp.sum(embedding**2, axis=-1)
         distances = query_squared_sum + embedding_squared_sum - 2 * y
         
         epsilon = 1e-4 
