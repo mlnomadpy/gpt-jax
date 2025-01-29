@@ -28,6 +28,7 @@ from flax.typing import (
   PaddingLike,
   LaxPadding,
 )
+from flax import linen as nn
 
 class YatEmbed(Module):
   """Embedding Module.
