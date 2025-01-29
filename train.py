@@ -65,7 +65,6 @@ class TrainConfig:
     weight_decay: float = 1e-2  # not applied to bias and embedding parameters
     grad_clip: float = 1.0      # gradient norm clipping magnitude
     gradient_accumulation_steps: int = 1    # used to simulate larger batch sizes
-    betas: any = [0.9, 0.95] # adamw optimizer betas
     learning_rate: CosineDecayScheduleConfig = field(default_factory=CosineDecayScheduleConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig) # wandb logging
     model: GPTConfig = field(default_factory=GPTConfig)     # gpt model config
@@ -138,7 +137,7 @@ def init_train_state(key, config: TrainConfig, learning_rate) -> TrainState:
     optimizer = optax.chain(
         # Apply weight decay only to non-bias parameters
         optax.clip_by_global_norm(config.grad_clip),
-        optax.adamw(learning_rate, *config.betas, weight_decay=config.weight_decay, mask=param_decay_mask(params)),
+        optax.adamw(learning_rate,  weight_decay=config.weight_decay, mask=param_decay_mask(params)),
         optax.apply_every(config.gradient_accumulation_steps),
     )
 
