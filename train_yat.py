@@ -14,7 +14,7 @@ from flax.training.train_state import TrainState
 from flax.jax_utils import replicate, unreplicate
 import optax
 
-from model_yat import GPT, GPTConfig
+from model import GPT, GPTConfig
 from dataset import get_dataset
 
 import tensorflow as tf
@@ -94,57 +94,19 @@ def train_step(state: TrainState, tokens: jnp.ndarray, dropout_key) -> Tuple[jnp
 
 @partial(jax.pmap, axis_name='batch')
 def eval_step(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
-    """Evaluation step that is compatible with pmap."""
-    # Split into input and target sequences
-    X = tokens[..., :-1]  # Remove last token
-    Y = tokens[..., 1:]   # Remove first token
-    
-    # Call model with explicit deterministic=True for eval mode
-    logits = state.apply_fn(
-        state.params,
-        X,
-        deterministic=True
-    )
-    
-    # Calculate cross entropy loss
-    loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
+    X, Y = tokens[:, :-1], tokens[:, 1:]
+    logits = state.apply_fn(state.params, X, True)
+    loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y)
     loss = jax.lax.pmean(loss, axis_name="batch")
     return loss
 
 
 def evaluate(state: TrainState, ds: tf.data.Dataset, batch_size: int, block_size: int, steps: int) -> jnp.ndarray:
-    """Evaluate model over multiple batches."""
     losses = []
-    num_devices = jax.local_device_count()
-    per_device_batch = batch_size // num_devices
-    
-    for step, tokens in zip(range(steps), ds):
-        print(f"Pre-processing step {step}")
-        print(f"Initial tokens shape: {tokens.shape}")
-        
-        # Convert to numpy array
+    for _, tokens in zip(range(steps), ds):
         tokens = tokens._numpy()
-        
-        # Truncate the sequence length to block_size + 1 
-        # (+1 for the target token)
-        max_len = block_size + 1
-        if tokens.shape[-1] > max_len:
-            print(f"Truncating sequence from {tokens.shape[-1]} to {max_len}")
-            tokens = tokens[..., :max_len]
-        
-        print(f"After truncation shape: {tokens.shape}")
-        
-        # Reshape tokens for multi-device evaluation
-        # First reshape to have device dimension
-        total_batch = tokens.shape[0]
-        tokens = tokens.reshape(num_devices, total_batch // num_devices, -1)
-        
-        print(f"Final tokens shape before eval_step: {tokens.shape}")
-        
-        # Get loss
         loss = eval_step(state, tokens)
-        losses.append(loss[0])  # Take first device's loss since they're all the same
-    
+        losses.append(loss)
     return jnp.mean(jnp.stack(losses))
 
 
