@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 from flax.core import FrozenDict, freeze, unfreeze
 from flax.traverse_util import flatten_dict, unflatten_dict
-from yatdense import YatDense
+
 
 @dataclass(frozen=True)
 class GPTConfig:

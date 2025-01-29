@@ -94,68 +94,20 @@ def train_step(state: TrainState, tokens: jnp.ndarray, dropout_key) -> Tuple[jnp
 
 @partial(jax.pmap, axis_name='batch')
 def eval_step(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
-    """Evaluation step that is compatible with pmap.
-    
-    Args:
-        state: Replicated train state
-        tokens: Input tokens shaped as (local_devices, batch_per_device, seq_len)
-        
-    Returns:
-        loss: The mean loss across the batch
-    """
-    # Split into input and target sequences
-    # tokens shape is (batch, seq_len)
     X, Y = tokens[:, :-1], tokens[:, 1:]
-    
-    # Call model with explicit deterministic=True for eval mode
-    logits = state.apply_fn(
-        state.params,
-        X,
-        deterministic=True
-    )
-    
-    # Calculate cross entropy loss
-    loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
-    
-    # Average loss across devices
+    logits = state.apply_fn(state.params, X, True)
+    loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y)
     loss = jax.lax.pmean(loss, axis_name="batch")
     return loss
 
 
 def evaluate(state: TrainState, ds: tf.data.Dataset, batch_size: int, block_size: int, steps: int) -> jnp.ndarray:
-    """Evaluate model over multiple batches.
-    
-    Args:
-        state: Train state (will be replicated)
-        ds: TensorFlow dataset 
-        batch_size: Batch size per device
-        block_size: Sequence length
-        steps: Number of eval steps
-        
-    Returns:
-        mean_loss: Average loss across all batches
-    """
     losses = []
-    num_devices = jax.local_device_count()
-    
     for _, tokens in zip(range(steps), ds):
-        # Convert to numpy array
         tokens = tokens._numpy()
-        
-        # Reshape tokens for multi-device evaluation
-        # Reshape to (num_devices, batch_per_device, seq_len)
-        batch_per_device = tokens.shape[0] // num_devices
-        tokens = tokens.reshape((num_devices, batch_per_device, -1))
-        
-        # Get loss (returned loss is already pmapped)
         loss = eval_step(state, tokens)
         losses.append(loss)
-    
-    # Stack and mean the losses
-    # Note: losses are already averaged across devices within each step
     return jnp.mean(jnp.stack(losses))
-
-
 
 
 def count_params(params: FrozenDict) -> int:
