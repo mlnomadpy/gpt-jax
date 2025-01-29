@@ -83,7 +83,7 @@ class YatDense(Module):
           dot_general = lax.dot_general
         y = dot_general(
           inputs,
-          jnp.transpose(kernel),
+          kernel,
           (((inputs.ndim - 1,), (0,)), ((), ())),
           precision=self.precision,
         )
