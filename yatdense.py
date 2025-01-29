@@ -88,7 +88,7 @@ class YatDense(Module):
           precision=self.precision,
         )
         inputs_squared_sum = jnp.sum(inputs**2, axis=-1, keepdims=True)
-        kernel_squared_sum = jnp.sum(kernel**2, axis=0)
+        kernel_squared_sum = jnp.sum((kernel.T)**2, axis=-1)
         distances = inputs_squared_sum + kernel_squared_sum - 2 * y
 
         # # Element-wise operation
