@@ -20,7 +20,7 @@ learning_rate: !dataclass:CosineDecayScheduleConfig
     decay_steps: 150000
     end_value: 6.4e-5
 wandb: !dataclass:WandbConfig
-    entity: jenkspt
+    entity: irf-sic
     project: owt
     name: gpt-124m
     mode: online
