@@ -56,16 +56,16 @@ class YatEmbed(Module):
         )
 
     def __call__(self, inputs: Array) -> Array:
-    """Embeds the inputs along the last dimension.
+        """Embeds the inputs along the last dimension.
 
-    Args:
-        inputs: input data, all dimensions are considered batch dimensions.
-        Values in the input array must be integers.
+        Args:
+            inputs: input data, all dimensions are considered batch dimensions.
+            Values in the input array must be integers.
 
-    Returns:
-        Output which is embedded input data.  The output shape follows the input,
-        with an additional ``features`` dimension appended.
-    """
+        Returns:
+            Output which is embedded input data.  The output shape follows the input,
+            with an additional ``features`` dimension appended.
+        """
         if not jnp.issubdtype(inputs.dtype, jnp.integer):
             raise ValueError('Input type must be an integer or unsigned integer.')
         # Use take because fancy indexing numpy arrays with JAX indices does not
