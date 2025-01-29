@@ -7,6 +7,7 @@ import flax.linen as nn
 from flax.core import FrozenDict, freeze, unfreeze
 from flax.traverse_util import flatten_dict, unflatten_dict
 from yatdense import YatDense
+from yatembed import YatEmbed
 
 @dataclass(frozen=True)
 class GPTConfig:
@@ -92,8 +93,8 @@ class GPT(nn.Module):
         pos = jnp.arange(0, T)[None]
         attn_mask = nn.make_causal_mask(idx, dtype=bool)
 
-        wte = nn.Embed(self.config.vocab_size, self.config.num_embeds, dtype=self.config.dtype, name='wte')
-        wpe = nn.Embed(self.config.block_size, self.config.num_embeds, dtype=self.config.dtype, name='wpe')
+        wte = YatEmbed(self.config.vocab_size, self.config.num_embeds, dtype=self.config.dtype, name='wte')
+        wpe = YatEmbed(self.config.block_size, self.config.num_embeds, dtype=self.config.dtype, name='wpe')
 
         token_embed = wte(idx)      # [B, T, num_embeds]
         pos_embed = wpe(pos)        # [1, T, num_embeds]
