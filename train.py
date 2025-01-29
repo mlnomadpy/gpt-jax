@@ -52,7 +52,7 @@ class CosineDecayScheduleConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     seed: int = 555
-    out_dir: str = 'out'                        # output directory for checkpoints (can be gcs path)
+    out_dir: str = '/kaggle/working/gpt-jax/out'                        # output directory for checkpoints (can be gcs path)
     train_pattern: str = 'train_??.tfrecord'    # training files glob pattern (can be gcs path)
     val_pattern: str = 'val_??.tfrecord'        # validation files glob pattern (can be gcs path)
     shuffle_buffer_size: int = 128
