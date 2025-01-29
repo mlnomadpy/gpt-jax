@@ -20,6 +20,39 @@ class GPTConfig:
     dtype: Optional[str] = None
 
 
+class SelfAttention(nn.Module):
+
+    num_heads: int
+    dtype: Any = jnp.float32
+    dropout_rate: float = 0.1
+    deterministic: Optional[bool] = None
+    use_proj_bias: bool = True
+
+    @nn.compact
+    def __call__(self, x, mask, deterministic=None):
+        B, T, C = x.shape
+        assert C % self.num_heads == 0
+        head_dim = C // self.num_heads
+        deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
+
+        qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_attn')(x)
+        qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
+        q, k, v = jnp.array_split(qkv, 3, axis=2)
+        # calculate attention matrix
+        scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)
+        # attn weight shape is (batch..., num_heads, q_length, kv_length)
+        attn = jnp.einsum('...qhd,...khd->...hqk', q, k) * scale
+        attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
+        attn = jax.nn.softmax(attn).astype(self.dtype)
+        attn = nn.Dropout(self.dropout_rate)(attn, deterministic=deterministic)
+
+        # return weighted sum over values for each query position
+        x = jnp.einsum('...hqk,...khd->...qhd', attn, v).reshape(B, T, C)
+        x = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(x)
+
+        x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
+        return x
+
 
 class MLP(nn.Module):
     config: GPTConfig
@@ -33,80 +66,20 @@ class MLP(nn.Module):
         return x
 
 
-
-class SelfAttention(nn.Module):
-    num_heads: int
-    dtype: Any = jnp.float32
-    dropout_rate: float = 0.1
-    deterministic: Optional[bool] = None
-    use_proj_bias: bool = True
-
-    @nn.compact
-    def __call__(self, x, mask, deterministic=None):
-        B, T, C = x.shape
-        print(f"SelfAttention input shape: {x.shape}")
-        
-        assert C % self.num_heads == 0
-        head_dim = C // self.num_heads
-        deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
-
-        print(f"Before YatDense - input shape: {x.shape}, target features: {3 * C}")
-        qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_attn')(x)
-        print(f"After YatDense qkv shape: {qkv.shape}")
-        
-        qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
-        print(f"After reshape qkv shape: {qkv.shape}")
-        
-        q, k, v = jnp.array_split(qkv, 3, axis=2)
-        print(f"Split shapes - q: {q.shape}, k: {k.shape}, v: {v.shape}")
-        
-        scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)
-        attn = jnp.einsum('...qhd,...khd->...hqk', q, k) * scale
-        print(f"Attention weights shape: {attn.shape}")
-        
-        attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
-        attn = jax.nn.softmax(attn).astype(self.dtype)
-        attn = nn.Dropout(self.dropout_rate)(attn, deterministic=deterministic)
-
-        x = jnp.einsum('...hqk,...khd->...qhd', attn, v).reshape(B, T, C)
-        print(f"Before final YatDense shape: {x.shape}")
-        
-        x = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(x)
-        print(f"Final output shape: {x.shape}")
-
-        x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
-        return x
-
-
 class Block(nn.Module):
     config: GPTConfig
 
     def setup(self):
         self.ln_1 = nn.LayerNorm(epsilon=1e-5, dtype=self.config.dtype, use_bias=self.config.use_bias)
         self.attn = SelfAttention(self.config.num_heads,
-                                 self.config.dtype,
-                                 dropout_rate=self.config.dropout_rate)
+                                  self.config.dtype,
+                                  dropout_rate=self.config.dropout_rate)
         self.ln_2 = nn.LayerNorm(epsilon=1e-5, dtype=self.config.dtype, use_bias=self.config.use_bias)
         self.mlp = MLP(self.config)
 
     def __call__(self, x, mask=None, deterministic=None):
-        print(f"\nBlock input shape: {x.shape}")
-        ln1_out = self.ln_1(x)
-        print(f"After LayerNorm 1 shape: {ln1_out.shape}")
-        
-        attn_out = self.attn(ln1_out, mask, deterministic)
-        print(f"After attention shape: {attn_out.shape}")
-        
-        x = x + attn_out
-        
-        ln2_out = self.ln_2(x)
-        print(f"After LayerNorm 2 shape: {ln2_out.shape}")
-        
-        mlp_out = self.mlp(ln2_out, deterministic)
-        print(f"After MLP shape: {mlp_out.shape}")
-        
-        x = x + mlp_out
-        print(f"Block output shape: {x.shape}")
+        x = x + self.attn(self.ln_1(x), mask, deterministic)
+        x = x + self.mlp(self.ln_2(x), deterministic)
         return x
 
 
@@ -116,37 +89,24 @@ class GPT(nn.Module):
     @nn.compact
     def __call__(self, idx, deterministic=None):
         B, T = idx.shape
-        print(f"\nGPT input shape: {idx.shape}")
-        
-        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.block_size}"
 
         pos = jnp.arange(0, T)[None]
         attn_mask = nn.make_causal_mask(idx, dtype=bool)
-        print(f"Attention mask shape: {attn_mask.shape}")
 
         wte = nn.Embed(self.config.vocab_size, self.config.num_embeds, dtype=self.config.dtype, name='wte')
         wpe = nn.Embed(self.config.block_size, self.config.num_embeds, dtype=self.config.dtype, name='wpe')
 
-        token_embed = wte(idx)
-        print(f"Token embedding shape: {token_embed.shape}")
-        
-        pos_embed = wpe(pos)
-        print(f"Position embedding shape: {pos_embed.shape}")
-        
+        token_embed = wte(idx)      # [B, T, num_embeds]
+        pos_embed = wpe(pos)        # [1, T, num_embeds]
         x = nn.Dropout(self.config.dropout_rate)(token_embed + pos_embed, deterministic)
-        print(f"After embedding + dropout shape: {x.shape}")
 
         for i in range(self.config.num_layers):
-            print(f"\nProcessing layer {i}")
             x = Block(self.config, name=str(i))(x, attn_mask, deterministic=deterministic)
 
         x = nn.LayerNorm(1e-5, dtype=self.config.dtype, use_bias=self.config.use_bias, name='ln_f')(x)
-        print(f"After final LayerNorm shape: {x.shape}")
-        
         logits = wte.attend(x)
-        print(f"Final logits shape: {logits.shape}")
         return logits
-
 
     def init(self, rng):
         """
