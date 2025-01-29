@@ -35,7 +35,18 @@ class SelfAttention(nn.Module):
         head_dim = C // self.num_heads
         deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
 
-        qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_attn')(x)
+        deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
+
+        # Handle weights differently based on deterministic flag
+        if deterministic:
+            # Use transposed weights for eval
+            qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, 
+                          kernel_init=lambda *_: jnp.transpose, 
+                          name='c_attn')(x)
+        else:
+            # Use normal weights for training
+            qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, 
+                          name='c_attn')(x)
         qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
         q, k, v = jnp.array_split(qkv, 3, axis=2)
         # calculate attention matrix
@@ -114,17 +125,8 @@ class GPT(nn.Module):
         which saves memory (since un-jitted model may not fit in memory)
         """
         tokens = jnp.zeros((2, self.config.block_size), dtype=jnp.uint16)
-        
-        # Split the RNG key for initialization
-        rng_params, rng_dropout = jax.random.split(rng)
-        
-        params = jax.jit(super().init, static_argnums=(2,))(
-            {'params': rng_params, 'dropout': rng_dropout}, 
-            tokens, 
-            True
-        )
+        params = jax.jit(super().init, static_argnums=(2,))(rng, tokens, True)
         return params
-
 
 
 def convert_hf_params(hf_params: FrozenDict, num_heads, num_embeds) -> FrozenDict:
