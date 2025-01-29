@@ -35,7 +35,7 @@ class YatDense(Module):
     dtype: Optional[Any] = None
     param_dtype: Any = jnp.float32
     precision: Any = None
-    kernel_init: Any = nn.initializers.orthogonal()
+    kernel_init: Any = nn.initializers.xavier_normal()
     bias_init: Any = zeros_init()
 
     alpha_init: Any = lambda key, shape, dtype: jnp.ones(shape, dtype)  # Initialize alpha to 1.0
