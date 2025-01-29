@@ -134,10 +134,17 @@ def init_train_state(key, config: TrainConfig, learning_rate) -> TrainState:
 
     params = model.init(key)
 
+    # Create weight decay mask
+    decay_mask = param_decay_mask(params)
+
+    # Create optimizer chain
     optimizer = optax.chain(
-        # Apply weight decay only to non-bias parameters
         optax.clip_by_global_norm(config.grad_clip),
-        optax.adamw(learning_rate,  weight_decay=config.weight_decay, mask=param_decay_mask(params)),
+        optax.adamw(
+            learning_rate,
+            weight_decay=config.weight_decay,
+            mask=decay_mask
+        ),
         optax.apply_every(config.gradient_accumulation_steps),
     )
 
