@@ -125,20 +125,16 @@ def convert_hf_params(hf_params: FrozenDict, num_heads, num_embeds) -> FrozenDic
 
     params = flatten_dict(params, sep='.')
     for k in params.keys():
-        #if k.endswith('attn.c_attn.bias'):
-        #    params[k] = params[k].reshape(num_heads, -1)
         if k.endswith('attn.c_attn.kernel'):
-            #params[k] = params[k].reshape(num_embeds, num_heads, -1) 
-            params[k] = params[k].T
+            # Remove the transpose operation
+            params[k] = params[k]  # or remove this line entirely
         elif k.endswith('attn.c_proj.kernel'):
-            #params[k] = params[k].reshape(num_heads, -1, num_embeds)
             params[k] = params[k].T
         elif k.split('.')[1] == 'mlp' and k.endswith('kernel'):
             params[k] = params[k].T
 
     params = unflatten_dict({f'params.{k}': v for k, v in params.items()}, sep='.')
     return freeze(params)
-
 
 def get_pretrained_params(model_type: str) -> Tuple[GPTConfig, FrozenDict]:
     """
