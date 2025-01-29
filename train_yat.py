@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional, Union, List
 from dataclasses import dataclass, field, asdict
 from functools import partial
 import os
@@ -52,7 +52,7 @@ class CosineDecayScheduleConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     seed: int = 555
-    out_dir: str = 'out'                        # output directory for checkpoints (can be gcs path)
+    out_dir: str = '/kaggle/working/gpt-jax/out'                        # output directory for checkpoints (can be gcs path)
     train_pattern: str = 'train_??.tfrecord'    # training files glob pattern (can be gcs path)
     val_pattern: str = 'val_??.tfrecord'        # validation files glob pattern (can be gcs path)
     shuffle_buffer_size: int = 128
@@ -65,7 +65,6 @@ class TrainConfig:
     weight_decay: float = 1e-2  # not applied to bias and embedding parameters
     grad_clip: float = 1.0      # gradient norm clipping magnitude
     gradient_accumulation_steps: int = 1    # used to simulate larger batch sizes
-    betas: Tuple[float, float] = (0.9, 0.95) # adamw optimizer betas
     learning_rate: CosineDecayScheduleConfig = field(default_factory=CosineDecayScheduleConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig) # wandb logging
     model: GPTConfig = field(default_factory=GPTConfig)     # gpt model config
@@ -135,10 +134,13 @@ def init_train_state(key, config: TrainConfig, learning_rate) -> TrainState:
 
     params = model.init(key)
 
+
+    # Create optimizer chain
     optimizer = optax.chain(
-        # Apply weight decay only to non-bias parameters
         optax.clip_by_global_norm(config.grad_clip),
-        optax.adamw(learning_rate, *config.betas, weight_decay=config.weight_decay, mask=param_decay_mask(params)),
+        optax.adamw(
+            learning_rate,
+        ),
         optax.apply_every(config.gradient_accumulation_steps),
     )
 
