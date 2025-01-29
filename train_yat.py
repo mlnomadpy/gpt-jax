@@ -92,7 +92,6 @@ def train_step(state: TrainState, tokens: jnp.ndarray, dropout_key) -> Tuple[jnp
     return loss, new_state
 
 
-
 @partial(jax.pmap, axis_name='batch')
 def eval_step(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
     """Evaluation step that is compatible with pmap.
@@ -104,15 +103,15 @@ def eval_step(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
     Returns:
         loss: The mean loss across the batch
     """
-    # Split into input and target while maintaining device dimension
-    X, Y = tokens[:, :, :-1], tokens[:, :, 1:]
+    # Split into input and target sequences
+    # tokens shape is (batch, seq_len)
+    X, Y = tokens[:, :-1], tokens[:, 1:]
     
     # Call model with explicit deterministic=True for eval mode
     logits = state.apply_fn(
         state.params,
         X,
-        deterministic=True,
-        rngs=None  # No dropout during eval
+        deterministic=True
     )
     
     # Calculate cross entropy loss
@@ -144,8 +143,9 @@ def evaluate(state: TrainState, ds: tf.data.Dataset, batch_size: int, block_size
         tokens = tokens._numpy()
         
         # Reshape tokens for multi-device evaluation
-        # From (batch, seq_len) to (devices, batch_per_device, seq_len)
-        tokens = tokens.reshape((num_devices, -1, tokens.shape[-1]))
+        # Reshape to (num_devices, batch_per_device, seq_len)
+        batch_per_device = tokens.shape[0] // num_devices
+        tokens = tokens.reshape((num_devices, batch_per_device, -1))
         
         # Get loss (returned loss is already pmapped)
         loss = eval_step(state, tokens)
@@ -154,6 +154,9 @@ def evaluate(state: TrainState, ds: tf.data.Dataset, batch_size: int, block_size
     # Stack and mean the losses
     # Note: losses are already averaged across devices within each step
     return jnp.mean(jnp.stack(losses))
+
+
+
 
 def count_params(params: FrozenDict) -> int:
     p = jax.tree_util.tree_map(lambda a: a.size if isinstance(a, jnp.ndarray) else 0, params)
