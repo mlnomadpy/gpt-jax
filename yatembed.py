@@ -45,7 +45,7 @@ class YatEmbed(Module):
     features: int
     dtype: Dtype | None = None
     param_dtype: Dtype = jnp.float32
-    embedding_init: Initializer = initializers.orthogonal()
+    embedding_init: Initializer = initializers.xavier_normal()
 
     def setup(self):
         self.embedding = self.param(
@@ -103,7 +103,7 @@ class YatEmbed(Module):
         embedding_squared_sum = jnp.sum(embedding**2, axis=-1)
         distances = query_squared_sum + embedding_squared_sum - 2 * y
         
-        epsilon = 1e-4 
+        epsilon = 1e-5
         y = y**2 / (distances + epsilon)
         
         return y 
