@@ -1,8 +1,8 @@
 # tyro YAML.
 !dataclass:TrainConfig
 seed: 555
-train_pattern: gs://smol-imagen/openwebtext/train_??.tfrecord
-val_pattern: gs://smol-imagen/openwebtext/val_??.tfrecord
+train_pattern: /kaggle/input/openwebtext-tfrecords/train_??.tfrecord
+val_pattern: /kaggle/input/openwebtext-tfrecords/val_??.tfrecord
 shuffle_buffer_size: 128
 eval_interval: 1000
 eval_steps: 50
