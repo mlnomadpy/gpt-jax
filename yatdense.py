@@ -57,7 +57,7 @@ class YatDense(Module):
         kernel = self.param(
             'kernel',
             self.kernel_init,
-            (self.features, jnp.shape(inputs)[-1]),
+            (jnp.shape(inputs)[-1], self.features),
             self.param_dtype,
         )
         alpha = self.param(
