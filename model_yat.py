@@ -70,11 +70,9 @@ class Block(nn.Module):
     config: GPTConfig
 
     def setup(self):
-        self.ln_1 = nn.LayerNorm(epsilon=1e-5, dtype=self.config.dtype, use_bias=self.config.use_bias)
         self.attn = SelfAttention(self.config.num_heads,
                                   self.config.dtype,
                                   dropout_rate=self.config.dropout_rate)
-        self.ln_2 = nn.LayerNorm(epsilon=1e-5, dtype=self.config.dtype, use_bias=self.config.use_bias)
         self.mlp = MLP(self.config)
 
     def __call__(self, x, mask=None, deterministic=None):
