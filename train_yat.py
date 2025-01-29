@@ -94,21 +94,52 @@ def train_step(state: TrainState, tokens: jnp.ndarray, dropout_key) -> Tuple[jnp
 
 @partial(jax.pmap, axis_name='batch')
 def eval_step(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
-    X, Y = tokens[:, :-1], tokens[:, 1:]
-    logits = state.apply_fn(state.params, X, True)
-    loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y)
+    print(f"eval_step input tokens shape: {tokens.shape}")
+    
+    # Split tokens into input and target sequences
+    X = tokens[:, :-1]
+    Y = tokens[:, 1:]
+    print(f"eval_step X shape: {X.shape}")
+    print(f"eval_step Y shape: {Y.shape}")
+    
+    # Call model with explicit deterministic=True for eval mode
+    logits = state.apply_fn(state.params, X, deterministic=True)
+    print(f"eval_step logits shape: {logits.shape}")
+    
+    # Calculate cross entropy loss
+    loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
+    
+    # Average loss across devices
     loss = jax.lax.pmean(loss, axis_name="batch")
     return loss
 
 
 def evaluate(state: TrainState, ds: tf.data.Dataset, batch_size: int, block_size: int, steps: int) -> jnp.ndarray:
     losses = []
-    for _, tokens in zip(range(steps), ds):
+    num_devices = jax.local_device_count()
+    print(f"\nNumber of devices: {num_devices}")
+    
+    for step, tokens in enumerate(ds):
+        if step >= steps:
+            break
+            
+        print(f"\nEval step {step}")
+        print(f"Raw tokens shape: {tokens.shape}")
         tokens = tokens._numpy()
+        print(f"After numpy tokens shape: {tokens.shape}")
+        
         loss = eval_step(state, tokens)
+        print(f"Loss shape: {loss.shape}")
         losses.append(loss)
-    return jnp.mean(jnp.stack(losses))
-
+        
+        if loss.shape != ():  # Non-scalar loss
+            print(f"WARNING: Non-scalar loss shape: {loss.shape}")
+    
+    losses = jnp.stack(losses)
+    print(f"Stacked losses shape: {losses.shape}")
+    final_loss = jnp.mean(losses)
+    print(f"Final loss shape: {final_loss.shape}")
+    return final_loss
 
 def count_params(params: FrozenDict) -> int:
     p = jax.tree_util.tree_map(lambda a: a.size if isinstance(a, jnp.ndarray) else 0, params)
