@@ -94,14 +94,10 @@ def train_step(state: TrainState, tokens: jnp.ndarray, dropout_key) -> Tuple[jnp
 
 @partial(jax.pmap, axis_name='batch')
 def eval_step(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
-    """Evaluation step that is compatible with pmap.
-    Args:
-        state: Replicated train state
-        tokens: Input tokens shaped (per_device_batch, seq_len)
-    """
+    """Evaluation step that is compatible with pmap."""
     # Split into input and target sequences
-    X = tokens[:, :-1]  # Shape: (per_device_batch, seq_len-1)
-    Y = tokens[:, 1:]   # Shape: (per_device_batch, seq_len-1)
+    X = tokens[..., :-1]  # Remove last token
+    Y = tokens[..., 1:]   # Remove first token
     
     # Call model with explicit deterministic=True for eval mode
     logits = state.apply_fn(
@@ -112,39 +108,43 @@ def eval_step(state: TrainState, tokens: jnp.ndarray) -> jnp.ndarray:
     
     # Calculate cross entropy loss
     loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
-    
-    # Average loss across batch dimension
     loss = jax.lax.pmean(loss, axis_name="batch")
     return loss
 
 
 def evaluate(state: TrainState, ds: tf.data.Dataset, batch_size: int, block_size: int, steps: int) -> jnp.ndarray:
-    """Evaluate model over multiple batches.
-    Args:
-        state: Train state (will be replicated)
-        ds: TensorFlow dataset
-        batch_size: Total batch size
-        block_size: Sequence length
-        steps: Number of eval steps
-    """
+    """Evaluate model over multiple batches."""
     losses = []
     num_devices = jax.local_device_count()
     per_device_batch = batch_size // num_devices
     
     for step, tokens in zip(range(steps), ds):
-        # Convert to numpy array - shape (total_batch, seq_len)
+        print(f"Pre-processing step {step}")
+        print(f"Initial tokens shape: {tokens.shape}")
+        
+        # Convert to numpy array
         tokens = tokens._numpy()
         
-        # Reshape tokens to (num_devices, per_device_batch, seq_len)
-        tokens = tokens.reshape(num_devices, per_device_batch, -1)
+        # Truncate the sequence length to block_size + 1 
+        # (+1 for the target token)
+        max_len = block_size + 1
+        if tokens.shape[-1] > max_len:
+            print(f"Truncating sequence from {tokens.shape[-1]} to {max_len}")
+            tokens = tokens[..., :max_len]
         
-        # Get loss (pmapped across devices)
+        print(f"After truncation shape: {tokens.shape}")
+        
+        # Reshape tokens for multi-device evaluation
+        # First reshape to have device dimension
+        total_batch = tokens.shape[0]
+        tokens = tokens.reshape(num_devices, total_batch // num_devices, -1)
+        
+        print(f"Final tokens shape before eval_step: {tokens.shape}")
+        
+        # Get loss
         loss = eval_step(state, tokens)
-        
-        # loss is already averaged across devices
         losses.append(loss[0])  # Take first device's loss since they're all the same
     
-    # Stack and mean the losses
     return jnp.mean(jnp.stack(losses))
 
 
