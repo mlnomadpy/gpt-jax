@@ -114,8 +114,17 @@ class GPT(nn.Module):
         which saves memory (since un-jitted model may not fit in memory)
         """
         tokens = jnp.zeros((2, self.config.block_size), dtype=jnp.uint16)
-        params = jax.jit(super().init, static_argnums=(2,))(rng, tokens, True)
+        
+        # Split the RNG key for initialization
+        rng_params, rng_dropout = jax.random.split(rng)
+        
+        params = jax.jit(super().init, static_argnums=(2,))(
+            {'params': rng_params, 'dropout': rng_dropout}, 
+            tokens, 
+            True
+        )
         return params
+
 
 
 def convert_hf_params(hf_params: FrozenDict, num_heads, num_embeds) -> FrozenDict:
