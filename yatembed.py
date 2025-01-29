@@ -48,12 +48,12 @@ class YatEmbed(Module):
     embedding_init: Initializer = initializers.orthogonal()
 
     def setup(self):
-    self.embedding = self.param(
-        'embedding',
-        self.embedding_init,
-        (self.num_embeddings, self.features),
-        self.param_dtype,
-    )
+        self.embedding = self.param(
+            'embedding',
+            self.embedding_init,
+            (self.num_embeddings, self.features),
+            self.param_dtype,
+        )
 
     def __call__(self, inputs: Array) -> Array:
     """Embeds the inputs along the last dimension.
@@ -66,21 +66,21 @@ class YatEmbed(Module):
         Output which is embedded input data.  The output shape follows the input,
         with an additional ``features`` dimension appended.
     """
-    if not jnp.issubdtype(inputs.dtype, jnp.integer):
-        raise ValueError('Input type must be an integer or unsigned integer.')
-    # Use take because fancy indexing numpy arrays with JAX indices does not
-    # work correctly.
-    (embedding,) = promote_dtype(
-        self.embedding, dtype=self.dtype, inexact=False
-    )
-    if self.num_embeddings == 1:
-        return jnp.where(
-        jnp.broadcast_to(inputs[..., None], inputs.shape + (self.features,))
-        == 0,
-        embedding,
-        jnp.nan,
+        if not jnp.issubdtype(inputs.dtype, jnp.integer):
+            raise ValueError('Input type must be an integer or unsigned integer.')
+        # Use take because fancy indexing numpy arrays with JAX indices does not
+        # work correctly.
+        (embedding,) = promote_dtype(
+            self.embedding, dtype=self.dtype, inexact=False
         )
-    return jnp.take(embedding, inputs, axis=0)
+        if self.num_embeddings == 1:
+            return jnp.where(
+            jnp.broadcast_to(inputs[..., None], inputs.shape + (self.features,))
+            == 0,
+            embedding,
+            jnp.nan,
+            )
+        return jnp.take(embedding, inputs, axis=0)
 
     def attend(self, query: Array) -> Array:
         """Attend over the embedding using a query array with squared Euclidean distance transformation.
