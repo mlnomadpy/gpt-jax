@@ -20,6 +20,7 @@ class GPTConfig:
     dtype: Optional[str] = None
 
 
+
 class MLP(nn.Module):
     config: GPTConfig
 
@@ -30,6 +31,8 @@ class MLP(nn.Module):
         x = YatDense(C, dtype=self.config.dtype, use_bias=self.config.use_bias, name='c_proj')(x)
         x = nn.Dropout(self.config.dropout_rate)(x, deterministic)
         return x
+
+
 
 class SelfAttention(nn.Module):
     num_heads: int
@@ -143,6 +146,16 @@ class GPT(nn.Module):
         logits = wte.attend(x)
         print(f"Final logits shape: {logits.shape}")
         return logits
+
+
+    def init(self, rng):
+        """
+        by jitting init, traced values instead of concrete values are used
+        which saves memory (since un-jitted model may not fit in memory)
+        """
+        tokens = jnp.zeros((2, self.config.block_size), dtype=jnp.uint16)
+        params = jax.jit(super().init, static_argnums=(2,))(rng, tokens, True)
+        return params
 
 
 def convert_hf_params(hf_params: FrozenDict, num_heads, num_embeds) -> FrozenDict:
