@@ -90,7 +90,7 @@ class GPT(nn.Module):
     @nn.compact
     def __call__(self, idx, deterministic=None):
         B, T = idx.shape
-        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.block_size}"
+        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
 
         pos = jnp.arange(0, T)[None]
         attn_mask = nn.make_causal_mask(idx, dtype=bool)
