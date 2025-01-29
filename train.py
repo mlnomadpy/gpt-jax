@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional, Union, List
 from dataclasses import dataclass, field, asdict
 from functools import partial
 import os
@@ -65,7 +65,7 @@ class TrainConfig:
     weight_decay: float = 1e-2  # not applied to bias and embedding parameters
     grad_clip: float = 1.0      # gradient norm clipping magnitude
     gradient_accumulation_steps: int = 1    # used to simulate larger batch sizes
-    betas: Tuple[float, float] = (0.9, 0.95) # adamw optimizer betas
+    betas: List[float] = [0.9, 0.95] # adamw optimizer betas
     learning_rate: CosineDecayScheduleConfig = field(default_factory=CosineDecayScheduleConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig) # wandb logging
     model: GPTConfig = field(default_factory=GPTConfig)     # gpt model config
