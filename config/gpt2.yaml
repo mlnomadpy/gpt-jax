@@ -13,9 +13,6 @@ train_steps: 150000
 weight_decay: 1.0e-1
 grad_clip: 1.0
 gradient_accumulation_steps: 1
-betas: 
-  - 0.9
-  - 0.95
 learning_rate: !dataclass:CosineDecayScheduleConfig
     init_value: 0.0
     peak_value: 6.4e-4
