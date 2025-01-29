@@ -34,11 +34,11 @@ class YatEmbed(Module):
     """Embedding Module.
 
     Attributes:
-        num_embeddings: number of embeddings / vocab size.
-        features: number of feature dimensions for each embedding.
-        dtype: the dtype of the embedding vectors (default: same as embedding).
-        param_dtype: the dtype passed to parameter initializers (default: float32).
-        embedding_init: embedding initializer.
+    num_embeddings: number of embeddings / vocab size.
+    features: number of feature dimensions for each embedding.
+    dtype: the dtype of the embedding vectors (default: same as embedding).
+    param_dtype: the dtype passed to parameter initializers (default: float32).
+    embedding_init: embedding initializer.
     """
 
     num_embeddings: int
@@ -48,39 +48,39 @@ class YatEmbed(Module):
     embedding_init: Initializer = initializers.orthogonal()
 
     def setup(self):
-        self.embedding = self.param(
+    self.embedding = self.param(
         'embedding',
         self.embedding_init,
         (self.num_embeddings, self.features),
         self.param_dtype,
-        )
+    )
 
     def __call__(self, inputs: Array) -> Array:
-        """Embeds the inputs along the last dimension.
+    """Embeds the inputs along the last dimension.
 
-        Args:
+    Args:
         inputs: input data, all dimensions are considered batch dimensions.
-            Values in the input array must be integers.
+        Values in the input array must be integers.
 
-        Returns:
+    Returns:
         Output which is embedded input data.  The output shape follows the input,
         with an additional ``features`` dimension appended.
-        """
-        if not jnp.issubdtype(inputs.dtype, jnp.integer):
+    """
+    if not jnp.issubdtype(inputs.dtype, jnp.integer):
         raise ValueError('Input type must be an integer or unsigned integer.')
-        # Use take because fancy indexing numpy arrays with JAX indices does not
-        # work correctly.
-        (embedding,) = promote_dtype(
+    # Use take because fancy indexing numpy arrays with JAX indices does not
+    # work correctly.
+    (embedding,) = promote_dtype(
         self.embedding, dtype=self.dtype, inexact=False
-        )
-        if self.num_embeddings == 1:
+    )
+    if self.num_embeddings == 1:
         return jnp.where(
-            jnp.broadcast_to(inputs[..., None], inputs.shape + (self.features,))
-            == 0,
-            embedding,
-            jnp.nan,
+        jnp.broadcast_to(inputs[..., None], inputs.shape + (self.features,))
+        == 0,
+        embedding,
+        jnp.nan,
         )
-        return jnp.take(embedding, inputs, axis=0)
+    return jnp.take(embedding, inputs, axis=0)
 
     def attend(self, query: Array) -> Array:
         """Attend over the embedding using a query array with squared Euclidean distance transformation.
