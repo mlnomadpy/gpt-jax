@@ -35,18 +35,7 @@ class SelfAttention(nn.Module):
         head_dim = C // self.num_heads
         deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
 
-        deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
-
-        # Handle weights differently based on deterministic flag
-        if deterministic:
-            # Use transposed weights for eval
-            qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, 
-                          kernel_init=lambda *_: jnp.transpose, 
-                          name='c_attn')(x)
-        else:
-            # Use normal weights for training
-            qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, 
-                          name='c_attn')(x)
+        qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_attn')(x)
         qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
         q, k, v = jnp.array_split(qkv, 3, axis=2)
         # calculate attention matrix
@@ -136,16 +125,20 @@ def convert_hf_params(hf_params: FrozenDict, num_heads, num_embeds) -> FrozenDic
 
     params = flatten_dict(params, sep='.')
     for k in params.keys():
+        #if k.endswith('attn.c_attn.bias'):
+        #    params[k] = params[k].reshape(num_heads, -1)
         if k.endswith('attn.c_attn.kernel'):
-            # Remove the transpose operation
-            params[k] = params[k]  # or remove this line entirely
+            #params[k] = params[k].reshape(num_embeds, num_heads, -1) 
+            params[k] = params[k].T
         elif k.endswith('attn.c_proj.kernel'):
+            #params[k] = params[k].reshape(num_heads, -1, num_embeds)
             params[k] = params[k].T
         elif k.split('.')[1] == 'mlp' and k.endswith('kernel'):
             params[k] = params[k].T
 
     params = unflatten_dict({f'params.{k}': v for k, v in params.items()}, sep='.')
     return freeze(params)
+
 
 def get_pretrained_params(model_type: str) -> Tuple[GPTConfig, FrozenDict]:
     """
