@@ -34,8 +34,12 @@ class SelfAttention(nn.Module):
         q, k, v = jnp.moveaxis(qkv, 3, 0)  # Shape: (3, B, T, num_heads, head_dim)
 
         scale = 1.0 / jnp.sqrt(head_dim)
-        attn_weights = jax.lax.batch_matmul(q, k.transpose(0, 1, 3, 2)) * scale
-        attn_weights = jnp.where(mask, attn_weights, -1e9)
+        attn_weights = jax.lax.batch_matmul(q, k.transpose(0, 1, 3, 2)) * scale  # (B, num_heads, T, T)
+
+        # Fix: Ensure mask is reshaped *before* applying it
+        mask = mask[:, :, None, :]  # Explicitly reshape to (B, num_heads, T, T) for TPU efficiency
+        attn_weights = jnp.where(mask, attn_weights, -1e9)  # Apply mask safely
+
         attn_weights = jax.nn.softmax(attn_weights, axis=-1)
         attn_weights = nn.Dropout(rate=self.dropout_rate)(attn_weights, deterministic=deterministic)
 
@@ -44,6 +48,7 @@ class SelfAttention(nn.Module):
 
         attn_output = nn.Dense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(attn_output)
         return nn.Dropout(rate=self.dropout_rate)(attn_output, deterministic=deterministic)
+
 
 
 class MLP(nn.Module):
