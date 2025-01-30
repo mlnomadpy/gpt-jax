@@ -19,35 +19,37 @@ class GPTConfig:
 
 
 class SelfAttention(nn.Module):
+
     num_heads: int
     dtype: Any = jnp.float32
     dropout_rate: float = 0.1
+    deterministic: Optional[bool] = None
     use_proj_bias: bool = True
 
     @nn.compact
     def __call__(self, x, mask, deterministic=None):
         B, T, C = x.shape
+        assert C % self.num_heads == 0
         head_dim = C // self.num_heads
+        deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
 
         qkv = nn.Dense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_attn')(x)
-        qkv = qkv.reshape(B, T, self.num_heads, 3, head_dim)
-        q, k, v = jnp.moveaxis(qkv, 3, 0)  # Shape: (3, B, T, num_heads, head_dim)
+        qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
+        q, k, v = jnp.array_split(qkv, 3, axis=2)
+        # calculate attention matrix
+        scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)
+        # attn weight shape is (batch..., num_heads, q_length, kv_length)
+        attn = jnp.einsum('...qhd,...khd->...hqk', q, k) * scale
+        attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
+        attn = jax.nn.softmax(attn).astype(self.dtype)
+        attn = nn.Dropout(self.dropout_rate)(attn, deterministic=deterministic)
 
-        scale = 1.0 / jnp.sqrt(head_dim)
-        attn_weights = jax.lax.batch_matmul(q, k.transpose(0, 1, 3, 2)) * scale  # (B, num_heads, T, T)
+        # return weighted sum over values for each query position
+        x = jnp.einsum('...hqk,...khd->...qhd', attn, v).reshape(B, T, C)
+        x = nn.Dense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(x)
 
-        # Fix: Ensure mask is reshaped *before* applying it
-        mask = mask[:, :, None, :]  # Explicitly reshape to (B, num_heads, T, T) for TPU efficiency
-        attn_weights = jnp.where(mask, attn_weights, -1e9)  # Apply mask safely
-
-        attn_weights = jax.nn.softmax(attn_weights, axis=-1)
-        attn_weights = nn.Dropout(rate=self.dropout_rate)(attn_weights, deterministic=deterministic)
-
-        attn_output = jax.lax.batch_matmul(attn_weights, v)
-        attn_output = attn_output.reshape(B, T, C)
-
-        attn_output = nn.Dense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(attn_output)
-        return nn.Dropout(rate=self.dropout_rate)(attn_output, deterministic=deterministic)
+        x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
+        return x
 
 
 
