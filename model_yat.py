@@ -35,38 +35,40 @@ class SelfAttention(nn.Module):
         head_dim = C // self.num_heads
         deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
 
+        # [B, T, 3*C] -> [B, T, 3*h, d]
         qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_attn')(x)
         qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
-        q, k, v = jnp.array_split(qkv, 3, axis=2)
+        q, k, v = jnp.array_split(qkv, 3, axis=2)  # Each has shape [B, T, h, d]
 
-        # Calculate dot product
-        dot_product = jnp.einsum('...qhd,...khd->...hqk', q, k)
-        
-        # Square the dot product
-        squared_dot_product = jnp.square(dot_product)  # Shape: [B, h, q, k]
+        # Rearrange to [B, h, T, d]
+        q = jnp.transpose(q, (0, 2, 1, 3))
+        k = jnp.transpose(k, (0, 2, 1, 3))
+        v = jnp.transpose(v, (0, 2, 1, 3))
 
-        # Calculate squared Euclidean distance: ||A-B||²
-        # Expand dimensions for proper broadcasting
-        q_expanded = jnp.expand_dims(q, axis=3)  # Shape: [B, T, h, 1, d]
-        k_expanded = jnp.expand_dims(k, axis=2)  # Shape: [B, T, h, 1, d]
-        
-        # Calculate squared difference directly
-        diff = q_expanded - k_expanded  # Shape: [B, T, h, T, d]
-        squared_diff = jnp.sum(jnp.square(diff), axis=-1)  # Shape: [B, T, h, T]
-        # Transpose to match dot product shape
-        squared_diff = jnp.transpose(squared_diff, (0, 2, 1, 3))  # Shape: [B, h, q, k]
-
-        # Calculate attention scores: (A·B)² / (||A-B||² + ε)
+        # Compute attention with squared dot product and euclidean distance
         scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)
-        attn = (squared_dot_product * scale) / (squared_diff + self.epsilon)
+        # Compute dot product attention
+        dot_product = jnp.einsum('bhid,bhjd->bhij', q, k)
+        squared_dot_product = jnp.square(dot_product * scale)
         
+        # Compute Euclidean distance squared between q and k vectors
+        # Using: ||a-b||² = ||a||² + ||b||² - 2(a·b)
+        # Computing in a TPU-friendly way
+        q_norm = jnp.sum(jnp.square(q), axis=-1)[..., None]  # [B, h, T, 1]
+        k_norm = jnp.sum(jnp.square(k), axis=-1)[..., None, :]  # [B, h, 1, T]
+        squared_dist = q_norm + k_norm - 2.0 * dot_product * scale
+        
+        # Final attention scores
+        attn = squared_dot_product / (squared_dist + self.epsilon)
+
         # Apply mask and softmax
         attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
         attn = jax.nn.softmax(attn).astype(self.dtype)
         attn = nn.Dropout(self.dropout_rate)(attn, deterministic=deterministic)
 
-        # Return weighted sum over values for each query position
-        x = jnp.einsum('...hqk,...khd->...qhd', attn, v).reshape(B, T, C)
+        # Apply attention to values and reshape
+        x = jnp.einsum('bhij,bhjd->bhid', attn, v)
+        x = jnp.transpose(x, (0, 2, 1, 3)).reshape(B, T, C)
         x = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(x)
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
         return x
