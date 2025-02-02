@@ -20,14 +20,13 @@ class GPTConfig:
     use_bias: bool = True
     dtype: Optional[str] = None
 
-
 class SelfAttention(nn.Module):
     num_heads: int
     dtype: Any = jnp.float32
     dropout_rate: float = 0.1
     deterministic: Optional[bool] = None
     use_proj_bias: bool = True
-    epsilon: float = 1e-6  # Small constant to prevent division by zero
+    epsilon: float = 1e-6
 
     @nn.compact
     def __call__(self, x, mask, deterministic=None):
@@ -40,26 +39,24 @@ class SelfAttention(nn.Module):
         qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
         q, k, v = jnp.array_split(qkv, 3, axis=2)
 
-        # Calculate dot product (A·B)
+        # Calculate dot product
         dot_product = jnp.einsum('...qhd,...khd->...hqk', q, k)
         
-        # Square the dot product (A·B)²
-        squared_dot_product = dot_product**2
+        # Square the dot product
+        squared_dot_product = jnp.square(dot_product)
 
         # Calculate euclidean distance ||A-B||²
-        # Expand dimensions for broadcasting
-        q_expanded = q[..., None, :, :]  # [..., q, h, 1, d]
-        k_expanded = k[..., None, :, :]  # [..., k, h, 1, d]
+        # Reshape q and k for broadcasting
+        q_term = jnp.sum(jnp.square(q), axis=-1)[..., :, None]  # [..., h, q, 1]
+        k_term = jnp.sum(jnp.square(k), axis=-1)[..., None, :]  # [..., h, 1, k]
+        qk_term = 2 * dot_product  # [..., h, q, k]
         
-        # Calculate squared difference
-        squared_diff = jnp.sum(
-            jnp.square(q_expanded - jnp.transpose(k_expanded, (0, 1, 3, 2, 4))),
-            axis=-1
-        )  # [..., h, q, k]
+        # ||a-b||² = ||a||² + ||b||² - 2(a·b)
+        squared_diff = q_term + k_term - qk_term
 
-        # Calculate attention scores with the new formula
-        # (A·B)² / (||A-B||² + ε)
-        attn = squared_dot_product / (squared_diff + self.epsilon)
+        # Calculate attention scores: (A·B)² / (||A-B||² + ε)
+        scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)  # Keep the scaling factor
+        attn = (squared_dot_product * scale) / (squared_diff + self.epsilon)
         
         # Apply mask and softmax
         attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
@@ -69,10 +66,8 @@ class SelfAttention(nn.Module):
         # Return weighted sum over values for each query position
         x = jnp.einsum('...hqk,...khd->...qhd', attn, v).reshape(B, T, C)
         x = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(x)
-
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
         return x
-
 
 class MLP(nn.Module):
     config: GPTConfig
