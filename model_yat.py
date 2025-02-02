@@ -43,19 +43,21 @@ class SelfAttention(nn.Module):
         dot_product = jnp.einsum('...qhd,...khd->...hqk', q, k)
         
         # Square the dot product
-        squared_dot_product = jnp.square(dot_product)
+        squared_dot_product = jnp.square(dot_product)  # Shape: [B, h, q, k]
 
-        # Calculate euclidean distance ||A-B||²
-        # Reshape q and k for broadcasting
-        q_term = jnp.sum(jnp.square(q), axis=-1)[..., :, None]  # [..., h, q, 1]
-        k_term = jnp.sum(jnp.square(k), axis=-1)[..., None, :]  # [..., h, 1, k]
-        qk_term = 2 * dot_product  # [..., h, q, k]
+        # Calculate squared Euclidean distance: ||A-B||²
+        # Expand dimensions for proper broadcasting
+        q_expanded = jnp.expand_dims(q, axis=3)  # Shape: [B, T, h, 1, d]
+        k_expanded = jnp.expand_dims(k, axis=2)  # Shape: [B, T, h, 1, d]
         
-        # ||a-b||² = ||a||² + ||b||² - 2(a·b)
-        squared_diff = q_term + k_term - qk_term
+        # Calculate squared difference directly
+        diff = q_expanded - k_expanded  # Shape: [B, T, h, T, d]
+        squared_diff = jnp.sum(jnp.square(diff), axis=-1)  # Shape: [B, T, h, T]
+        # Transpose to match dot product shape
+        squared_diff = jnp.transpose(squared_diff, (0, 2, 1, 3))  # Shape: [B, h, q, k]
 
         # Calculate attention scores: (A·B)² / (||A-B||² + ε)
-        scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)  # Keep the scaling factor
+        scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)
         attn = (squared_dot_product * scale) / (squared_diff + self.epsilon)
         
         # Apply mask and softmax
@@ -68,7 +70,7 @@ class SelfAttention(nn.Module):
         x = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(x)
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
         return x
-
+        
 class MLP(nn.Module):
     config: GPTConfig
 
