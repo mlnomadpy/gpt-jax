@@ -39,7 +39,7 @@ class YatDense(Module):
     bias_init: Any = zeros_init()
 
     alpha_init: Any = lambda key, shape, dtype: jnp.ones(shape, dtype)  # Initialize alpha to 1.0
-    epsilon: float = 1e-3
+    epsilon: float = 1/137
     dot_general: DotGeneralT | None = None
     dot_general_cls: Any = None
     return_weights: bool = False
