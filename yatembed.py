@@ -103,7 +103,7 @@ class YatEmbed(Module):
         embedding_squared_sum = jnp.sum(embedding**2, axis=-1)
         distances = query_squared_sum + embedding_squared_sum - 2 * y
         
-        epsilon = 1e-5
+        epsilon = 1e-3
         y = y**2 / (distances + epsilon)
         
         return y 
