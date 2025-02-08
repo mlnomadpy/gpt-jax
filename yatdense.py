@@ -32,6 +32,7 @@ class YatDense(Module):
     """
     features: int
     use_bias: bool = True
+    hubble_norm:bool = True
     dtype: Optional[Any] = None
     param_dtype: Any = jnp.float32
     precision: Any = None
@@ -100,6 +101,8 @@ class YatDense(Module):
 
         y = y * scale
         # Normalize y
+        if self.hubble_norm:
+          y = y / (1 + jnp.log(1+ jnp.linalg.norm(x))) 
         if self.return_weights:
            return y, kernel
         return y
