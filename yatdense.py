@@ -102,7 +102,7 @@ class YatDense(Module):
         y = y * scale
         # Normalize y
         if self.hubble_norm:
-          y = y / (1 + jnp.log(1+ jnp.linalg.norm(x))) 
+          y = y / (1 + jnp.log(1+ jnp.linalg.norm(y))) 
         if self.return_weights:
            return y, kernel
         return y
