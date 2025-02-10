@@ -19,13 +19,27 @@ class GPTConfig:
     use_bias: bool = True
     dtype: Any = jnp.float32
 
-class RotaryPositionalEmbedding:
-    """Implements RoPE for better generalization on long sequences."""
-    def __call__(self, x):
-        seq_len = x.shape[1]
-        freqs = jnp.exp(jnp.arange(0, x.shape[-1], 2) * -jnp.log(10000) / x.shape[-1])
-        angles = jnp.einsum("i,j->ij", jnp.arange(seq_len), freqs)
-        return jnp.concatenate([jnp.cos(angles), jnp.sin(angles)], axis=-1)
+def create_rotary_embedding(dim: int, max_seq_len: int, base: int = 10000):
+    """Creates rotary positional embeddings."""
+    inv_freq = 1.0 / (base ** (jnp.arange(0, dim, 2) / dim))
+    position = jnp.arange(max_seq_len)
+    sinusoid_input = jnp.einsum('i,j->ij', position, inv_freq)
+    sin = jnp.sin(sinusoid_input)
+    cos = jnp.cos(sinusoid_input)
+    return sin, cos
+
+def apply_rotary_embedding(x: jnp.ndarray, sin: jnp.ndarray, cos: jnp.ndarray) -> jnp.ndarray:
+    """Applies rotary positional embedding to input tensor."""
+    sin = sin[:x.shape[1]]  # Take only what we need
+    cos = cos[:x.shape[1]]
+    dim = x.shape[-1]
+    sin = jnp.broadcast_to(sin[:, None, :], x.shape[:-1] + (dim//2,))
+    cos = jnp.broadcast_to(cos[:, None, :], x.shape[:-1] + (dim//2,))
+    x1, x2 = x[..., :dim//2], x[..., dim//2:]
+    return jnp.concatenate([
+        x1 * cos - x2 * sin,
+        x2 * cos + x1 * sin
+    ], axis=-1)
 
 class SelfAttention(nn.Module):
     num_heads: int
@@ -34,33 +48,45 @@ class SelfAttention(nn.Module):
     use_proj_bias: bool = True
     epsilon: float = 1e-6
 
+    def setup(self):
+        head_dim = self.num_heads * 64  # Standard head dimension
+        self.sin, self.cos = create_rotary_embedding(head_dim, 2048)  # Support up to 2048 tokens
+
     @nn.compact
     def __call__(self, x, mask, deterministic=None):
         B, T, C = x.shape
         head_dim = C // self.num_heads
 
+        # QKV projection
         qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_attn')(x)
         qkv = qkv.reshape(B, T, 3, self.num_heads, head_dim)
-        q, k, v = jnp.split(qkv, 3, axis=2)
-        q, k, v = q.squeeze(2), k.squeeze(2), v.squeeze(2)
+        q, k, v = jnp.moveaxis(qkv, 2, 0)  # Split into q, k, v and move batch dims
 
-        # Apply RoPE
-        rope = RotaryPositionalEmbedding()(q)
-        rope = rope[:, None, :]  # Expands shape to (seq_len, 1, head_dim)
+        # Apply rotary embeddings
+        q = apply_rotary_embedding(q, self.sin, self.cos)
+        k = apply_rotary_embedding(k, self.sin, self.cos)
+
+        # Prepare mask
+        if mask is None:
+            mask = nn.make_causal_mask(jnp.ones((B, T)), dtype=bool)
+        mask = mask[:, None, :, :]  # Add head dimension
+
+        # Scaled dot-product attention
+        scale = jnp.sqrt(head_dim).astype(self.dtype)
+        attn = (q @ jnp.swapaxes(k, -2, -1)) / scale
         
-        q = q * rope  # Broadcasting will now work correctly
-        k = k * rope  # Same fix applied to k
+        # Apply mask and softmax
+        attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
+        attn = jax.nn.softmax(attn, axis=-1)
+        attn = nn.Dropout(self.dropout_rate)(attn, deterministic)
 
-        scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)
-        attn_weights = jnp.einsum('bhid,bhjd->bhij', q, k) * scale
-        attn_weights = jnp.where(mask, attn_weights, jnp.finfo(self.dtype).min)
-        attn_weights = jax.nn.softmax(attn_weights)
-        attn_weights = nn.Dropout(self.dropout_rate)(attn_weights, deterministic)
-
-        x = jnp.einsum('bhij,bhjd->bhid', attn_weights, v).reshape(B, T, C)
-        x = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(x)
-        x = nn.Dropout(self.dropout_rate)(x, deterministic)
-        return x
+        # Compute output
+        output = attn @ v
+        output = output.reshape(B, T, C)
+        output = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(output)
+        output = nn.Dropout(self.dropout_rate)(output, deterministic)
+        
+        return output
 
 class MLP(nn.Module):
     config: GPTConfig
@@ -80,7 +106,12 @@ class Block(nn.Module):
 
     def setup(self):
         self.norm1 = nn.LayerNorm(dtype=self.config.dtype, use_bias=False)
-        self.attn = SelfAttention(self.config.num_heads, self.config.dtype, dropout_rate=self.config.dropout_rate)
+        self.attn = SelfAttention(
+            num_heads=self.config.num_heads,
+            dtype=self.config.dtype,
+            dropout_rate=self.config.dropout_rate,
+            use_proj_bias=self.config.use_bias
+        )
         self.norm2 = nn.LayerNorm(dtype=self.config.dtype, use_bias=False)
         self.mlp = MLP(self.config)
 
@@ -100,8 +131,10 @@ class GPT(nn.Module):
         pos = jnp.arange(0, T)[None]
         attn_mask = nn.make_causal_mask(idx, dtype=bool)
 
-        wte = self.param('wte', nn.initializers.xavier_uniform(), (self.config.vocab_size, self.config.num_embeds))
-        wpe = self.param('wpe', nn.initializers.xavier_uniform(), (self.config.block_size, self.config.num_embeds))
+        wte = self.param('wte', nn.initializers.normal(stddev=0.02), 
+                        (self.config.vocab_size, self.config.num_embeds))
+        wpe = self.param('wpe', nn.initializers.normal(stddev=0.02), 
+                        (self.config.block_size, self.config.num_embeds))
 
         token_embed = jnp.take(wte, idx, axis=0)
         pos_embed = jnp.take(wpe, pos, axis=0)
@@ -110,6 +143,7 @@ class GPT(nn.Module):
         for i in range(self.config.num_layers):
             x = Block(self.config, name=str(i))(x, attn_mask, deterministic=deterministic)
 
+        x = nn.LayerNorm(dtype=self.config.dtype, use_bias=False, name='ln_f')(x)
         logits = x @ wte.T  # Weight tying
         return logits
 
@@ -117,7 +151,6 @@ class GPT(nn.Module):
         tokens = jnp.zeros((2, self.config.block_size), dtype=jnp.uint16)
         params = jax.jit(super().init, static_argnums=(2,))(rng, tokens, True)
         return params
-
 
 
 
