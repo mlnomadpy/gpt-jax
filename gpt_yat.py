@@ -19,27 +19,53 @@ class GPTConfig:
     use_bias: bool = True
     dtype: Any = jnp.float32
 
-def create_rotary_embedding(dim: int, max_seq_len: int, base: int = 10000):
-    """Creates rotary positional embeddings."""
-    inv_freq = 1.0 / (base ** (jnp.arange(0, dim, 2) / dim))
-    position = jnp.arange(max_seq_len)
-    sinusoid_input = jnp.einsum('i,j->ij', position, inv_freq)
-    sin = jnp.sin(sinusoid_input)
-    cos = jnp.cos(sinusoid_input)
-    return sin, cos
+class RotaryPositionalEmbedding:
+    """Implements RoPE (Rotary Position Embedding) with correct shape handling."""
+    def __init__(self, head_dim: int, max_seq_len: int = 2048, base: int = 10000):
+        self.head_dim = head_dim
+        self.max_seq_len = max_seq_len
+        self.base = base
 
-def apply_rotary_embedding(x: jnp.ndarray, sin: jnp.ndarray, cos: jnp.ndarray) -> jnp.ndarray:
-    """Applies rotary positional embedding to input tensor."""
-    sin = sin[:x.shape[1]]  # Take only what we need
-    cos = cos[:x.shape[1]]
-    dim = x.shape[-1]
-    sin = jnp.broadcast_to(sin[:, None, :], x.shape[:-1] + (dim//2,))
-    cos = jnp.broadcast_to(cos[:, None, :], x.shape[:-1] + (dim//2,))
-    x1, x2 = x[..., :dim//2], x[..., dim//2:]
-    return jnp.concatenate([
-        x1 * cos - x2 * sin,
-        x2 * cos + x1 * sin
-    ], axis=-1)
+    def __call__(self, q: jnp.ndarray, k: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        # q, k shape: (batch_size, num_heads, seq_len, head_dim)
+        device = q.device_buffer.device()
+        
+        # Create position indices
+        seq_len = q.shape[2]
+        position = jnp.arange(seq_len, dtype=jnp.float32)
+        
+        # Create rotation angles
+        div_term = jnp.exp(jnp.arange(0, self.head_dim, 2) * (-jnp.log(self.base) / self.head_dim))
+        sincos_input = jnp.einsum('i,j->ij', position, div_term)
+        
+        # Calculate sin and cos
+        sin = jnp.sin(sincos_input)
+        cos = jnp.cos(sincos_input)
+        
+        # Reshape sin and cos to match q/k dimensions
+        sin = sin[:, None, :]  # (seq_len, 1, head_dim//2)
+        cos = cos[:, None, :]  # (seq_len, 1, head_dim//2)
+        
+        # Expand dimensions for broadcasting
+        sin = sin[None, None, :, :, :]  # (1, 1, seq_len, 1, head_dim//2)
+        cos = cos[None, None, :, :, :]  # (1, 1, seq_len, 1, head_dim//2)
+        
+        # Split q and k into real and imaginary parts
+        q1, q2 = jnp.split(q, 2, axis=-1)
+        k1, k2 = jnp.split(k, 2, axis=-1)
+        
+        # Apply rotary embedding
+        q_out = jnp.concatenate([
+            q1 * cos - q2 * sin,
+            q2 * cos + q1 * sin
+        ], axis=-1)
+        
+        k_out = jnp.concatenate([
+            k1 * cos - k2 * sin,
+            k2 * cos + k1 * sin
+        ], axis=-1)
+        
+        return q_out, k_out
 
 class SelfAttention(nn.Module):
     num_heads: int
@@ -49,45 +75,44 @@ class SelfAttention(nn.Module):
     epsilon: float = 1e-6
 
     def setup(self):
-        head_dim = self.num_heads * 64  # Standard head dimension
-        self.sin, self.cos = create_rotary_embedding(head_dim, 2048)  # Support up to 2048 tokens
+        self.head_dim = 64  # Standard head dimension
+        self.rope = RotaryPositionalEmbedding(head_dim=self.head_dim)
 
     @nn.compact
     def __call__(self, x, mask, deterministic=None):
         B, T, C = x.shape
-        head_dim = C // self.num_heads
-
+        
         # QKV projection
         qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_attn')(x)
-        qkv = qkv.reshape(B, T, 3, self.num_heads, head_dim)
-        q, k, v = jnp.moveaxis(qkv, 2, 0)  # Split into q, k, v and move batch dims
-
+        
+        # Reshape to separate heads
+        qkv = qkv.reshape(B, T, 3, self.num_heads, self.head_dim)
+        q, k, v = jnp.moveaxis(qkv, 2, 0)  # Split into q, k, v
+        
         # Apply rotary embeddings
-        q = apply_rotary_embedding(q, self.sin, self.cos)
-        k = apply_rotary_embedding(k, self.sin, self.cos)
-
-        # Prepare mask
-        if mask is None:
-            mask = nn.make_causal_mask(jnp.ones((B, T)), dtype=bool)
-        mask = mask[:, None, :, :]  # Add head dimension
-
+        q, k = self.rope(q, k)
+        
         # Scaled dot-product attention
-        scale = jnp.sqrt(head_dim).astype(self.dtype)
+        scale = jnp.sqrt(self.head_dim).astype(self.dtype)
         attn = (q @ jnp.swapaxes(k, -2, -1)) / scale
         
-        # Apply mask and softmax
-        attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
+        # Apply mask
+        if mask is not None:
+            mask = mask[:, None, :, :]  # Add head dimension
+            attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
+        
         attn = jax.nn.softmax(attn, axis=-1)
         attn = nn.Dropout(self.dropout_rate)(attn, deterministic)
-
-        # Compute output
-        output = attn @ v
-        output = output.reshape(B, T, C)
-        output = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(output)
-        output = nn.Dropout(self.dropout_rate)(output, deterministic)
         
-        return output
+        # Compute output
+        out = attn @ v
+        out = out.reshape(B, T, C)
+        out = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(out)
+        out = nn.Dropout(self.dropout_rate)(out, deterministic)
+        
+        return out
 
+        
 class MLP(nn.Module):
     config: GPTConfig
 
