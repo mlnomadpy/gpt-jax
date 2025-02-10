@@ -46,8 +46,8 @@ class SelfAttention(nn.Module):
 
         # Apply RoPE
         rope = RotaryPositionalEmbedding()(q)
-        q = q * rope
-        k = k * rope
+        q = q * rope[:, None, :, :]  # Expands rope to (1, 1, seq_len, head_dim)
+        k = k * rope[:, None, :, :]  # Same fix applied to k
 
         scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)
         attn_weights = jnp.einsum('bhid,bhjd->bhij', q, k) * scale
@@ -115,6 +115,7 @@ class GPT(nn.Module):
         tokens = jnp.zeros((2, self.config.block_size), dtype=jnp.uint16)
         params = jax.jit(super().init, static_argnums=(2,))(rng, tokens, True)
         return params
+
 
 
 
