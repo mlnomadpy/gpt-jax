@@ -1,6 +1,5 @@
 from typing import Any, Optional, Tuple
 from dataclasses import dataclass
-from functools import partial
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -18,87 +17,75 @@ class GPTConfig:
     num_embeds: int = 768
     dropout_rate: float = 0.1
     use_bias: bool = True
-    dtype: Optional[str] = None
+    dtype: Any = jnp.float32
+
+class RotaryPositionalEmbedding:
+    """Implements RoPE for better generalization on long sequences."""
+    def __call__(self, x):
+        seq_len = x.shape[1]
+        freqs = jnp.exp(jnp.arange(0, x.shape[-1], 2) * -jnp.log(10000) / x.shape[-1])
+        angles = jnp.einsum("i,j->ij", jnp.arange(seq_len), freqs)
+        return jnp.concatenate([jnp.cos(angles), jnp.sin(angles)], axis=-1)
 
 class SelfAttention(nn.Module):
     num_heads: int
     dtype: Any = jnp.float32
     dropout_rate: float = 0.1
-    deterministic: Optional[bool] = None
     use_proj_bias: bool = True
     epsilon: float = 1e-6
 
     @nn.compact
     def __call__(self, x, mask, deterministic=None):
         B, T, C = x.shape
-        assert C % self.num_heads == 0
         head_dim = C // self.num_heads
-        deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
 
-        # [B, T, 3*C] -> [B, T, 3*h, d]
         qkv = YatDense(3 * C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_attn')(x)
-        qkv = qkv.reshape(B, T, 3 * self.num_heads, head_dim)
-        q, k, v = jnp.array_split(qkv, 3, axis=2)  # Each has shape [B, T, h, d]
+        qkv = qkv.reshape(B, T, 3, self.num_heads, head_dim)
+        q, k, v = jnp.split(qkv, 3, axis=2)
+        q, k, v = q.squeeze(2), k.squeeze(2), v.squeeze(2)
 
-        # Rearrange to [B, h, T, d]
-        q = jnp.transpose(q, (0, 2, 1, 3))
-        k = jnp.transpose(k, (0, 2, 1, 3))
-        v = jnp.transpose(v, (0, 2, 1, 3))
+        # Apply RoPE
+        rope = RotaryPositionalEmbedding()(q)
+        q = q * rope
+        k = k * rope
 
-        # Compute attention with squared dot product and euclidean distance
         scale = 1.0 / jnp.sqrt(head_dim).astype(self.dtype)
-        # Compute dot product attention
-        dot_product = jnp.einsum('bhid,bhjd->bhij', q, k)
-        squared_dot_product = jnp.square(dot_product * scale)
-        
-        # Compute Euclidean distance squared between q and k vectors
-        # Using: ||a-b||² = ||a||² + ||b||² - 2(a·b)
-        # Computing in a TPU-friendly way
-        q_norm = jnp.sum(jnp.square(q), axis=-1)[..., None]  # [B, h, T, 1]
-        k_norm = jnp.sum(jnp.square(k), axis=-1)[..., None, :]  # [B, h, 1, T]
-        squared_dist = q_norm + k_norm - 2.0 * dot_product * scale
-        
-        # Final attention scores
-        attn = squared_dot_product / (squared_dist + self.epsilon)
+        attn_weights = jnp.einsum('bhid,bhjd->bhij', q, k) * scale
+        attn_weights = jnp.where(mask, attn_weights, jnp.finfo(self.dtype).min)
+        attn_weights = jax.nn.softmax(attn_weights)
+        attn_weights = nn.Dropout(self.dropout_rate)(attn_weights, deterministic)
 
-        # Apply mask and softmax
-        attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
-        attn = jax.nn.softmax(attn).astype(self.dtype)
-        attn = nn.Dropout(self.dropout_rate)(attn, deterministic=deterministic)
-
-        # Apply attention to values and reshape
-        x = jnp.einsum('bhij,bhjd->bhid', attn, v)
-        x = jnp.transpose(x, (0, 2, 1, 3)).reshape(B, T, C)
+        x = jnp.einsum('bhij,bhjd->bhid', attn_weights, v).reshape(B, T, C)
         x = YatDense(C, use_bias=self.use_proj_bias, dtype=self.dtype, name='c_proj')(x)
-        x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=deterministic)
+        x = nn.Dropout(self.dropout_rate)(x, deterministic)
         return x
-        
+
 class MLP(nn.Module):
     config: GPTConfig
 
     @nn.compact
     def __call__(self, x, deterministic=None):
-        B, T, C = x.shape
-        x = YatDense(4 * C, dtype=self.config.dtype, use_bias=self.config.use_bias, name='c_fc')(x)
-        x = YatDense(C, dtype=self.config.dtype, use_bias=self.config.use_bias, name='c_proj')(x)
+        hidden_dim = 4 * self.config.num_embeds
+        gate = YatDense(hidden_dim, dtype=self.config.dtype, use_bias=self.config.use_bias, name='c_fc')(x)
+        x = YatDense(hidden_dim, dtype=self.config.dtype, use_bias=self.config.use_bias, name='c_gate')(x)
+        x = nn.gelu(x) * gate  # SwiGLU activation
+        x = YatDense(self.config.num_embeds, dtype=self.config.dtype, use_bias=self.config.use_bias, name='c_proj')(x)
         x = nn.Dropout(self.config.dropout_rate)(x, deterministic)
         return x
-
 
 class Block(nn.Module):
     config: GPTConfig
 
     def setup(self):
-        self.attn = SelfAttention(self.config.num_heads,
-                                  self.config.dtype,
-                                  dropout_rate=self.config.dropout_rate)
+        self.norm1 = nn.LayerNorm(dtype=self.config.dtype, use_bias=False)
+        self.attn = SelfAttention(self.config.num_heads, self.config.dtype, dropout_rate=self.config.dropout_rate)
+        self.norm2 = nn.LayerNorm(dtype=self.config.dtype, use_bias=False)
         self.mlp = MLP(self.config)
 
     def __call__(self, x, mask=None, deterministic=None):
-        x = x + self.attn(x, mask, deterministic)
-        x = x + self.mlp(x, deterministic)
+        x = x + self.attn(self.norm1(x), mask, deterministic)
+        x = x + self.mlp(self.norm2(x), deterministic)
         return x
-
 
 class GPT(nn.Module):
     config: GPTConfig
@@ -106,33 +93,29 @@ class GPT(nn.Module):
     @nn.compact
     def __call__(self, idx, deterministic=None):
         B, T = idx.shape
-        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.block_size}"
+        assert T <= self.config.block_size, "Input too long!"
 
         pos = jnp.arange(0, T)[None]
         attn_mask = nn.make_causal_mask(idx, dtype=bool)
 
-        wte = YatEmbed(self.config.vocab_size, self.config.num_embeds, dtype=self.config.dtype, name='wte')
-        wpe = YatEmbed(self.config.block_size, self.config.num_embeds, dtype=self.config.dtype, name='wpe')
+        wte = self.param('wte', nn.initializers.xavier_uniform(), (self.config.vocab_size, self.config.num_embeds))
+        wpe = self.param('wpe', nn.initializers.xavier_uniform(), (self.config.block_size, self.config.num_embeds))
 
-        token_embed = wte(idx)      # [B, T, num_embeds]
-        pos_embed = wpe(pos)        # [1, T, num_embeds]
+        token_embed = jnp.take(wte, idx, axis=0)
+        pos_embed = jnp.take(wpe, pos, axis=0)
         x = nn.Dropout(self.config.dropout_rate)(token_embed + pos_embed, deterministic)
 
         for i in range(self.config.num_layers):
             x = Block(self.config, name=str(i))(x, attn_mask, deterministic=deterministic)
 
-        # x = nn.LayerNorm(1e-5, dtype=self.config.dtype, use_bias=self.config.use_bias, name='ln_f')(x)
-        logits = wte.attend(x)
+        logits = x @ wte.T  # Weight tying
         return logits
 
     def init(self, rng):
-        """
-        by jitting init, traced values instead of concrete values are used
-        which saves memory (since un-jitted model may not fit in memory)
-        """
         tokens = jnp.zeros((2, self.config.block_size), dtype=jnp.uint16)
         params = jax.jit(super().init, static_argnums=(2,))(rng, tokens, True)
         return params
+
 
 
 def convert_hf_params(hf_params: FrozenDict, num_heads, num_embeds) -> FrozenDict:
