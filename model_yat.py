@@ -95,7 +95,8 @@ class Block(nn.Module):
         self.mlp = MLP(self.config)
 
     def __call__(self, x, mask=None, deterministic=None):
-        x = x + self.attn(x, mask, deterministic)
+        # x = x + self.attn(x, mask, deterministic)
+        x = x + self.mlp(x, deterministic)
         x = x + self.mlp(x, deterministic)
         return x
 
