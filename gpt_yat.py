@@ -39,6 +39,7 @@ class SelfAttention(nn.Module):
     use_proj_bias: bool = True
     epsilon: float = 1/137
     return_attention: bool = False
+    alpha_init: Any = lambda key, shape, dtype: jnp.ones(shape, dtype)  # Initialize alpha to 1.0
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, mask: jnp.ndarray, deterministic: Optional[bool] = None) -> jnp.ndarray | AttentionOutput:
