@@ -137,9 +137,8 @@ def init_train_state(key, config: TrainConfig, learning_rate) -> TrainState:
 
     # Create optimizer chain
     optimizer = optax.chain(
-        optax.adabelief(
-            learning_rate, 
-            nesterov=True
+        optax.nadamw(
+            learning_rate
         ),
         optax.apply_every(config.gradient_accumulation_steps),
     )
