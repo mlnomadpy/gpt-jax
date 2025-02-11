@@ -47,8 +47,14 @@ class SelfAttention(nn.Module):
         deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
 
         # Pre-compute static values
+        alpha = self.param(
+            'alpha',
+            self.alpha_init,
+            (1,),  # Single scalar parameter
+            self.param_dtype,
+
         scale = jnp.log1p(head_dim).astype(self.dtype)
-        inv_scale = head_dim / scale
+        inv_scale = (head_dim / scale) ** alpha
 
         # QKV projection with shape optimization
         qkv = YatDense(
