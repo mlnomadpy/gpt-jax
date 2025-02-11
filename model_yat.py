@@ -26,7 +26,7 @@ class SelfAttention(nn.Module):
     dropout_rate: float = 0.1
     deterministic: Optional[bool] = None
     use_proj_bias: bool = True
-    epsilon: float = 1e-6
+    epsilon: float = 1.
 
     @nn.compact
     def __call__(self, x, mask, deterministic=None):
