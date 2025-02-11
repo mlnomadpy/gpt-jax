@@ -51,7 +51,7 @@ class SelfAttention(nn.Module):
             'alpha',
             self.alpha_init,
             (1,),  # Single scalar parameter
-            self.param_dtype,
+            self.dtype)
 
         scale = jnp.log1p(head_dim).astype(self.dtype)
         inv_scale = (head_dim / scale) ** alpha
