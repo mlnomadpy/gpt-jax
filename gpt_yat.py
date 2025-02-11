@@ -47,8 +47,8 @@ class SelfAttention(nn.Module):
         deterministic = nn.merge_param('deterministic', self.deterministic, deterministic)
 
         # Pre-compute static values
-        scale = jnp.sqrt(head_dim).astype(self.dtype)
-        inv_scale = 1.0 / scale
+        scale = jnp.log1p(head_dim).astype(self.dtype)
+        inv_scale = head_dim / scale
 
         # QKV projection with shape optimization
         qkv = YatDense(
@@ -69,7 +69,7 @@ class SelfAttention(nn.Module):
 
         # Optimized attention computation
         dot_product = jnp.einsum('bhid,bhjd->bhij', q, k, optimize='optimal')
-        scaled_dot_product = dot_product * inv_scale
+        scaled_dot_product = dot_product 
         squared_dot_product = jnp.square(scaled_dot_product)
         
         # Vectorized distance computation
@@ -79,6 +79,7 @@ class SelfAttention(nn.Module):
         
         # Attention scores with improved numerical stability
         attn = squared_dot_product / (squared_dist + self.epsilon)
+        attn = attn * inv_scale
         attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
         attn = jax.nn.softmax(attn, axis=-1).astype(self.dtype)
         
