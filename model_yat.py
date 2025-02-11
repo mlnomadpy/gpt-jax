@@ -27,6 +27,7 @@ class SelfAttention(nn.Module):
     deterministic: Optional[bool] = None
     use_proj_bias: bool = True
     epsilon: float = 1/137
+    alpha_init: Any = lambda key, shape, dtype: jnp.ones(shape, dtype)  # Initialize alpha to 1.0
 
     @nn.compact
     def __call__(self, x, mask, deterministic=None):
