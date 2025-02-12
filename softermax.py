@@ -1,40 +1,55 @@
+import jax
+import jax.numpy as jnp
+from typing import Union
+import chex
+import functools
+import operator
+from typing import Optional, Union
+from functools import partial
+
+from optax import projections
+
+
+
+def canonicalize_axis(axis, ndim):
+  """Vendored version of :func:`numpy.lib.array_utils.normalize_axis_index`.
+  """
+  if 0 <= (axis := operator.index(axis)) < ndim:
+    return axis
+  elif -ndim <= axis < 0:
+    return axis + ndim
+  else:
+    raise ValueError(f'axis {axis} is out of bounds for array of '
+                     f'dimension {ndim}')
+
+
+def canonicalize_axes(axes, ndim) -> tuple[int, ...]:
+  """Vendored version of :func:`numpy.lib.array_utils.normalize_axis_tuple`.
+  """
+  return tuple(canonicalize_axis(x, ndim) for x in axes)
+
+
 @partial(jax.custom_jvp, nondiff_argnums=(1,))
 def softer_max(
-    x: ArrayLike,
-    axis: int | tuple[int, ...] | None = -1,
-    where: ArrayLike | None = None,
-    initial: ArrayLike | None = -jnp.inf) -> jax.Array:
-    """
-    A modified softmax that uses (1 + x) instead of exp(x).
+    x: jax.Array,
+    axis: Union[int, tuple[int, ...], None] = -1,
+    where: Union[jax.Array, None] = None,
+    initial: jax.Array = -jnp.inf
+) -> jax.Array:
+    # Implementation of the softer_max function (same as provided earlier)
+    assert jnp.all(jnp.greater_equal(x, 0)), "Input array must be non-negative"
     
-    Args:
-        x: Input array (must be non-negative)
-        axis: Axis along which to compute softer_max
-        where: Optional boolean mask
-        initial: Value to use for masked elements
-    
-    Returns:
-        Array with softer_max applied
-    """
-    # Ensure x is non-negative
-    assert jnp.all(x >= 0), "Input array must be non-negative"
+    if where is not None:
+        x_safe = jnp.where(where, x, 0.0)
+        unnormalized = jnp.where(where, 1 + x_safe, 0.0)
+    else:
+        unnormalized = 1 + x
 
-    # Safe handling of masked elements
-    x_safe = x if where is None else jnp.where(where, x, 0.0)
-
-    # Compute unnormalized values (1 + x instead of exp(x))
-    unnormalized = 1 + x_safe
-
-    # Compute sum
-    sum_unnormalized = jnp.sum(unnormalized, axis=axis, keepdims=True)
-    
-    # Normalize
+    sum_unnormalized = jnp.sum(unnormalized, axis, keepdims=True)
     result = unnormalized / sum_unnormalized
-
-    # Apply mask if provided
+    
     if where is not None:
         result = jnp.where(where, result, 0.0)
-
     return result
 
 @softer_max.defjvp
