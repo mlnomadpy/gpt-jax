@@ -8,7 +8,7 @@ from flax.core import FrozenDict, freeze, unfreeze
 from flax.traverse_util import flatten_dict, unflatten_dict
 from yatdense import YatDense
 from yatembed import YatEmbed
-
+from softermax import softer_max
 @dataclass(frozen=True)
 class GPTConfig:
     block_size: int = 1024
@@ -88,7 +88,7 @@ class SelfAttention(nn.Module):
         attn = squared_dot_product / (squared_dist + self.epsilon)
         attn = attn * inv_scale
         attn = jnp.where(mask, attn, jnp.finfo(self.dtype).min)
-        attn = jax.nn.softmax(attn, axis=-1).astype(self.dtype)
+        attn = softer_max(attn, axis=-1).astype(self.dtype)
         
         if not deterministic:
             attn = nn.Dropout(self.dropout_rate)(attn, deterministic=deterministic)

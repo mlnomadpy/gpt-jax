@@ -21,6 +21,8 @@ import tensorflow as tf
 
 import logging
 import sys
+from softermax_ce_w_int_label import softermax_cross_entropy_with_integer_labels
+
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
 
@@ -79,7 +81,7 @@ def train_step(state: TrainState, tokens: jnp.ndarray, dropout_key) -> Tuple[jnp
     def loss_fn(params: FrozenDict) -> jnp.ndarray:
         X, Y = tokens[:, :-1], tokens[:, 1:]
         logits = state.apply_fn(params, X, False, rngs={'dropout': dropout_key})
-        loss = optax.softmax_cross_entropy_with_integer_labels(logits, Y).mean()
+        loss = softermax_cross_entropy_with_integer_labels(logits, Y).mean()
         return loss
     
     # per-device loss and grads
