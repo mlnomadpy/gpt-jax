@@ -5,6 +5,7 @@ import chex
 import functools
 import operator
 from typing import Optional, Union
+from functools import partial
 
 from optax import projections
 
